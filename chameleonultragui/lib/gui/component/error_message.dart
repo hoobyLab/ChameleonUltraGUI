@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class ErrorMessage extends StatelessWidget {
   final String errorMessage;
-  final double minHeight;
+  final double boxHeight;
   final double boxWidth;
   final Color iconColor;
   final double iconSize;
@@ -11,7 +11,7 @@ class ErrorMessage extends StatelessWidget {
   const ErrorMessage({
     super.key,
     required this.errorMessage,
-    this.minHeight = 60.0,
+    this.boxHeight = 60.0,
     this.boxWidth = double.infinity,
     this.iconColor = Colors.white,
     this.iconSize = 24.0,
@@ -27,18 +27,15 @@ class ErrorMessage extends StatelessWidget {
     const Color textColor = Color(0xFF5F2120);
 
     return Container(
-      constraints: BoxConstraints(
-        minHeight: minHeight,
-        maxHeight: double.infinity,
-      ),
+      height: boxHeight,
       width: boxWidth,
       decoration: BoxDecoration(
         color: boxColor,
         borderRadius: borderRadius,
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Icon(
             Icons.error_outline,
@@ -54,8 +51,6 @@ class ErrorMessage extends StatelessWidget {
                 fontSize: 16.0,
                 fontWeight: FontWeight.bold,
               ),
-              softWrap: true,
-              overflow: TextOverflow.visible,
             ),
           ),
         ],

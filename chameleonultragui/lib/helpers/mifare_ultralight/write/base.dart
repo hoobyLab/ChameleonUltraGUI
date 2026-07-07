@@ -1,13 +1,13 @@
+import 'dart:typed_data';
+
 import 'package:chameleonultragui/gui/page/read_card.dart';
 import 'package:chameleonultragui/helpers/general.dart';
-import 'package:chameleonultragui/helpers/validators.dart';
 import 'package:chameleonultragui/helpers/write.dart';
 import 'package:chameleonultragui/sharedprefsprovider.dart';
 import 'package:flutter/material.dart';
 
 // Localizations
 import 'package:chameleonultragui/generated/i18n/app_localizations.dart';
-import 'package:flutter/services.dart';
 
 class BaseMifareUltralightWriteHelper extends AbstractWriteHelper {
   HFCardInfo? hfInfo;
@@ -43,25 +43,33 @@ class BaseMifareUltralightWriteHelper extends AbstractWriteHelper {
     final GlobalKey<FormState> formKey = GlobalKey<FormState>();
 
     return Row(children: [
-      Expanded(
-          child: Form(
-              key: formKey,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
+      Form(
+          key: formKey,
+          autovalidateMode: AutovalidateMode.onUserInteraction,
+          child: Expanded(
               child: Column(
-                children: [
-                  TextFormField(
-                    controller: keyController,
-                    decoration: InputDecoration(
-                        labelText: localizations.key,
-                        hintMaxLines: 4,
-                        hintText: localizations.enter_something(
-                            localizations.ultralight_key_prompt)),
-                    inputFormatters: hexFormatter,
-                    validator: (value) => validateHex(value, localizations,
-                        exactBytes: 4, fieldName: localizations.key),
-                  )
-                ],
-              ))),
+            children: [
+              TextFormField(
+                controller: keyController,
+                decoration: InputDecoration(
+                    labelText: localizations.key,
+                    hintMaxLines: 4,
+                    hintText: localizations
+                        .enter_something(localizations.ultralight_key_prompt)),
+                validator: (String? value) {
+                  if (value!.isNotEmpty && !isValidHexString(value)) {
+                    return localizations.must_be_valid_hex;
+                  }
+
+                  if (value.length != 8) {
+                    return localizations.must_be(4, localizations.key);
+                  }
+
+                  return null;
+                },
+              )
+            ],
+          ))),
       TextButton(
         onPressed: () => {
           setState(() {
@@ -116,7 +124,9 @@ class BaseMifareUltralightWriteHelper extends AbstractWriteHelper {
       await communicator.setReaderDeviceMode(true);
     }
 
-    if (await communicator.scan14443aTag() == null) {
+    try {
+      await communicator.scan14443aTag();
+    } catch (e) {
       return false;
     }
 
@@ -129,47 +139,28 @@ class BaseMifareUltralightWriteHelper extends AbstractWriteHelper {
       }
     }
 
-    for (var pass = 0; pass < 2; pass++) {
-      for (var block = 0; block < totalBlocks; block++) {
-        if (card.data[block].isNotEmpty) {
-          List<int> blockData = List.from(card.data[block]);
+    for (var block = 0; block < totalBlocks; block++) {
+      Uint8List write = await communicator.send14ARaw(
+          Uint8List.fromList([0xA2, block, ...card.data[block]]),
+          keepRfField: true,
+          checkResponseCrc: false,
+          autoSelect: block == 0 || block == 3);
+      if (write.isEmpty || write[0] != 0x0A || block == 2) {
+        await communicator.send14ARaw(Uint8List(1)); // reset
 
-          if (pass == 0) {
-            if (block == 2 && blockData.length >= 4) {
-              blockData[2] = 0x00;
-              blockData[3] = 0x00;
-            }
+        if (key!.isNotEmpty) {
+          await communicator.send14ARaw(
+              Uint8List.fromList([0x1B, ...hexToBytes(key!)]),
+              keepRfField: true);
+        }
 
-            if (block == 3) {
-              blockData = Uint8List(4);
-            }
-          } else if (![2, 3].contains(block)) {
-            continue;
-          }
-
-          Uint8List write = await communicator.send14ARaw(
-              Uint8List.fromList([0xA2, block, ...blockData]),
-              keepRfField: true,
-              checkResponseCrc: false,
-              autoSelect: block == 0 || block == 3);
-          if (write.isEmpty || write[0] != 0x0A || block == 2) {
-            await communicator.send14ARaw(Uint8List(1)); // reset
-
-            if (key!.isNotEmpty) {
-              await communicator.send14ARaw(
-                  Uint8List.fromList([0x1B, ...hexToBytes(key!)]),
-                  keepRfField: true);
-            }
-
-            if (block > 2) {
-              // block is not UID
-              failedBlocks.add(block);
-            }
-          }
-
-          update((block / (totalBlocks + 2) * 100).round());
+        if (block > 2) {
+          // block is not UID
+          failedBlocks.add(block);
         }
       }
+
+      update((block / totalBlocks * 100).round());
     }
 
     return failedBlocks.isEmpty;

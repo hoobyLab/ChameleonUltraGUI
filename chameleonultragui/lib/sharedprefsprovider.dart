@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'dart:convert';
+import 'package:chameleonultragui/bridge/chameleon.dart';
 import 'package:chameleonultragui/helpers/colors.dart' as colors;
-import 'package:chameleonultragui/helpers/definitions.dart';
 import 'package:chameleonultragui/helpers/general.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,7 +15,6 @@ class Dictionary {
   String name;
   List<Uint8List> keys;
   Color color;
-  int keyLength;
 
   factory Dictionary.fromJson(String json) {
     Map<String, dynamic> data = jsonDecode(json);
@@ -25,21 +24,12 @@ class Dictionary {
     if (data['color'] == null) {
       data['color'] = colorToHex(Colors.deepOrange);
     }
-
-    if (data['keyLength'] == null) {
-      // legacy
-      data['keyLength'] = 12;
-    }
-
-    final keyLength = data['keyLength'] as int;
     final color = hexToColor(data['color']);
-
     List<Uint8List> keys = [];
     for (var key in encodedKeys) {
       keys.add(Uint8List.fromList(List<int>.from(key)));
     }
-    return Dictionary(
-        id: id, name: name, keys: keys, color: color, keyLength: keyLength);
+    return Dictionary(id: id, name: name, keys: keys, color: color);
   }
 
   String toJson() {
@@ -47,66 +37,32 @@ class Dictionary {
       'id': id,
       'name': name,
       'color': colorToHex(color),
-      'keys': keys.map((key) => key.toList()).toList(),
-      'keyLength': keyLength
+      'keys': keys.map((key) => key.toList()).toList()
     });
   }
 
-  @override
-  String toString() {
+  factory Dictionary.fromFile(String file, String name) {
+    final lines = file.split("\n");
+    List<Uint8List> keys = [];
+    for (var key in lines) {
+      keys.add(hexToBytes(key));
+    }
+    return Dictionary(name: name, keys: keys);
+  }
+
+  Uint8List toFile() {
     String output = "";
     for (var key in keys) {
       output += "${bytesToHex(key).toUpperCase()}\n";
     }
-    return output;
-  }
-
-  Uint8List toFile() {
-    return const Utf8Encoder().convert(toString());
-  }
-
-  factory Dictionary.fromString(String input,
-      {String name = '', Color color = Colors.deepOrange}) {
-    List<Uint8List> keys = [];
-    List<int> allowedKeySizes = [
-      12, // 6 - Mifare Classic
-      8, // 4 - Mifare Ultralight / T55XX
-      32, // 16 - Mifare Ultralight C / AES / Mifare Plus
-    ];
-    int currentKeySize = 0;
-
-    for (var key in input.split("\n")) {
-      key = key.trim().replaceAll('#', ' ');
-
-      if (key.contains(' ')) {
-        key = key.split(' ')[0];
-      }
-
-      if (allowedKeySizes.contains(key.length) &&
-          isValidHexString(key) &&
-          (currentKeySize == 0 || currentKeySize == key.length)) {
-        if (currentKeySize == 0) {
-          currentKeySize = key.length;
-        }
-
-        keys.add(hexToBytes(key));
-      }
-    }
-
-    return Dictionary(
-        id: const Uuid().v4(),
-        name: name,
-        keys: keys,
-        color: color,
-        keyLength: currentKeySize);
+    return const Utf8Encoder().convert(output);
   }
 
   Dictionary(
       {String? id,
       this.name = "",
       this.keys = const [],
-      this.color = Colors.deepOrange,
-      this.keyLength = 0})
+      this.color = Colors.deepOrange})
       : id = id ?? const Uuid().v4();
 }
 
@@ -187,7 +143,6 @@ class CardSave {
 class CardSaveExtra {
   Uint8List ultralightSignature;
   Uint8List ultralightVersion;
-  List<int> ultralightCounters;
 
   factory CardSaveExtra.import(Map<String, dynamic> data) {
     List<int> readBytes(Map<String, dynamic> data, String key) {
@@ -197,14 +152,10 @@ class CardSaveExtra {
 
     final ultralightSignature = readBytes(data, 'ultralightSignature');
     final ultralightVersion = readBytes(data, 'ultralightVersion');
-    final ultralightCounters = data['ultralightCounters'] != null
-        ? List<int>.from(data['ultralightCounters'] as List<dynamic>)
-        : <int>[];
 
     return CardSaveExtra(
         ultralightSignature: Uint8List.fromList(ultralightSignature),
-        ultralightVersion: Uint8List.fromList(ultralightVersion),
-        ultralightCounters: ultralightCounters);
+        ultralightVersion: Uint8List.fromList(ultralightVersion));
   }
 
   Map<String, dynamic> export() {
@@ -218,20 +169,12 @@ class CardSaveExtra {
       json['ultralightVersion'] = ultralightVersion;
     }
 
-    if (ultralightCounters.isNotEmpty) {
-      json['ultralightCounters'] = ultralightCounters;
-    }
-
     return json;
   }
 
-  CardSaveExtra(
-      {Uint8List? ultralightSignature,
-      Uint8List? ultralightVersion,
-      List<int>? ultralightCounters})
+  CardSaveExtra({Uint8List? ultralightSignature, Uint8List? ultralightVersion})
       : ultralightSignature = ultralightSignature ?? Uint8List(0),
-        ultralightVersion = ultralightVersion ?? Uint8List(0),
-        ultralightCounters = ultralightCounters ?? <int>[];
+        ultralightVersion = ultralightVersion ?? Uint8List(0);
 }
 
 class SharedPreferencesProvider extends ChangeNotifier {
@@ -308,22 +251,11 @@ class SharedPreferencesProvider extends ChangeNotifier {
     _sharedPreferences.setBool('debug', value);
   }
 
-  bool isEmulatedChameleon() {
-    return _sharedPreferences.getBool('emulate_device') ?? false;
-  }
-
-  void setEmulatedChameleon(bool value) {
-    _sharedPreferences.setBool('emulate_device', value);
-  }
-
-  List<Dictionary> getDictionaries({int keyLength = 0}) {
+  List<Dictionary> getDictionaries() {
     List<Dictionary> output = [];
     final data = _sharedPreferences.getStringList('dictionaries') ?? [];
     for (var dictionary in data) {
-      Dictionary dict = Dictionary.fromJson(dictionary);
-      if (keyLength == 0 || dict.keyLength == keyLength) {
-        output.add(dict);
-      }
+      output.add(Dictionary.fromJson(dictionary));
     }
     return output;
   }
@@ -480,21 +412,5 @@ class SharedPreferencesProvider extends ChangeNotifier {
 
   void setConfirmDelete(bool value) {
     _sharedPreferences.setBool('confirm_delete', value);
-  }
-
-  bool getAutoScanEnabled() {
-    return _sharedPreferences.getBool('auto_scan_enabled') ?? true;
-  }
-
-  void setAutoScanEnabled(bool value) {
-    _sharedPreferences.setBool('auto_scan_enabled', value);
-  }
-
-  bool getAutoConnectFirstFoundDevice() {
-    return _sharedPreferences.getBool('auto_connect_first_found') ?? false;
-  }
-
-  void setAutoConnectFirstFoundDevice(bool value) {
-    _sharedPreferences.setBool('auto_connect_first_found', value);
   }
 }

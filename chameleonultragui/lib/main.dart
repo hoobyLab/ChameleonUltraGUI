@@ -3,10 +3,6 @@ import 'package:chameleonultragui/bridge/chameleon.dart';
 import 'package:chameleonultragui/connector/serial_abstract.dart';
 import 'package:chameleonultragui/connector/serial_android.dart';
 import 'package:chameleonultragui/connector/serial_ble.dart';
-import 'package:chameleonultragui/connector/serial_emulator.dart';
-import 'package:chameleonultragui/connector/serial_macos.dart';
-import 'package:chameleonultragui/gui/page/tools.dart';
-import 'package:chameleonultragui/helpers/font.dart';
 import 'package:chameleonultragui/helpers/general.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -23,6 +19,7 @@ import 'package:chameleonultragui/gui/page/connect.dart';
 import 'package:chameleonultragui/gui/page/debug.dart';
 import 'package:chameleonultragui/gui/page/slot_manager.dart';
 import 'package:chameleonultragui/gui/page/flashing.dart';
+import 'package:chameleonultragui/gui/page/mfkey32.dart';
 import 'package:chameleonultragui/gui/page/read_card.dart';
 import 'package:chameleonultragui/gui/page/write_card.dart';
 import 'package:chameleonultragui/gui/page/pending_connection.dart';
@@ -79,55 +76,13 @@ class ChameleonGUIState extends ChangeNotifier {
 
   // Flashing easter egg
   bool easterEgg = false;
-  dynamic _suppressedAutoReconnectPort;
+
+  bool forceMfkey32Page = false;
 
   GlobalKey navigationRailKey = GlobalKey();
   Size? navigationRailSize;
 
   void changesMade() {
-    notifyListeners();
-  }
-
-  void onConnectorStateChanged() {
-    if (connector == null || !connector!.connected) {
-      communicator = null;
-      progress = null;
-    }
-    notifyListeners();
-  }
-
-  bool isAutoReconnectSuppressed(dynamic devicePort) {
-    return _suppressedAutoReconnectPort == devicePort;
-  }
-
-  void clearAutoReconnectSuppression([dynamic devicePort]) {
-    if (devicePort == null || _suppressedAutoReconnectPort == devicePort) {
-      _suppressedAutoReconnectPort = null;
-    }
-  }
-
-  void syncAutoReconnectSuppression(Iterable<dynamic> visiblePorts) {
-    if (_suppressedAutoReconnectPort == null) {
-      return;
-    }
-
-    for (final port in visiblePorts) {
-      if (port == _suppressedAutoReconnectPort) {
-        return;
-      }
-    }
-
-    _suppressedAutoReconnectPort = null;
-  }
-
-  Future<void> disconnect({bool manual = false}) async {
-    final suppressedPort = manual ? connector?.activeDevicePort : null;
-    await connector?.performDisconnect();
-    if (manual && suppressedPort != null) {
-      _suppressedAutoReconnectPort = suppressedPort;
-    }
-    communicator = null;
-    progress = null;
     notifyListeners();
   }
 
@@ -160,55 +115,30 @@ class _MainPageState extends State<MainPage> {
   void reassemble() async {
     // Disconnect on reload
     var appState = Provider.of<ChameleonGUIState>(context, listen: false);
-    await appState.disconnect();
+    await appState.connector?.performDisconnect();
+    appState.changesMade();
 
     super.reassemble();
-  }
-
-  AbstractSerial getConnector(ChameleonGUIState appState) {
-    if (appState._sharedPreferencesProvider!.isEmulatedChameleon()) {
-      return EmulatorSerial(log: appState.log!);
-    }
-
-    if (Platform.isMacOS) {
-      return MacOSSerial(log: appState.log!);
-    }
-
-    if (Platform.isAndroid) {
-      return AndroidSerial(log: appState.log!);
-    }
-
-    if (Platform.isIOS) {
-      return BLESerial(log: appState.log!);
-    }
-
-    return NativeSerial(log: appState.log!);
-  }
-
-  Logger getLogger(ChameleonGUIState appState) {
-    if (appState._sharedPreferencesProvider!.isDebugLogging() &&
-        appState._sharedPreferencesProvider!.isDebugMode()) {
-      return Logger(
-        output: SharedPreferencesLogger(appState._sharedPreferencesProvider!),
-        printer: PrettyPrinter(
-          noBoxingByDefault: true,
-        ),
-        filter: ChameleonLogFilter(),
-      );
-    } else {
-      return Logger();
-    }
   }
 
   @override
   Widget build(BuildContext context) {
     var appState = context.watch<ChameleonGUIState>();
     appState._sharedPreferencesProvider = widget.sharedPreferencesProvider;
-    appState.log ??= getLogger(appState);
-    appState.connector ??= getConnector(appState);
-    appState.connector!.connectionStateCallback =
-        appState.onConnectorStateChanged;
-
+    appState.log ??= Logger(
+        output: appState._sharedPreferencesProvider!.isDebugLogging()
+            ? SharedPreferencesLogger(appState._sharedPreferencesProvider!)
+            : ConsoleOutput(),
+        printer: PrettyPrinter(
+          noBoxingByDefault:
+              appState._sharedPreferencesProvider!.isDebugLogging(),
+        ),
+        filter: ChameleonLogFilter());
+    appState.connector ??= Platform.isAndroid
+        ? AndroidSerial(log: appState.log!)
+        : (Platform.isIOS
+            ? BLESerial(log: appState.log!)
+            : NativeSerial(log: appState.log!));
     if (appState.sharedPreferencesProvider.getSideBarAutoExpansion()) {
       double width = MediaQuery.of(context).size.width;
       if (width >= 600) {
@@ -225,9 +155,8 @@ class _MainPageState extends State<MainPage> {
         selectedIndex != 0 &&
         selectedIndex != 2 &&
         selectedIndex != 5 &&
-        selectedIndex != 6 &&
-        selectedIndex != 7) {
-      // If not connected, and not on home, tools, settings or dev page, go to home page
+        selectedIndex != 6) {
+      // If not connected, and not on home, settings or dev page, go to home page
       selectedIndex = 0;
     }
 
@@ -261,16 +190,18 @@ class _MainPageState extends State<MainPage> {
         page = const WriteCardPage();
         break;
       case 5:
-        page = const ToolsPage();
-        break;
-      case 6:
         page = const SettingsMainPage();
         break;
-      case 7:
+      case 6:
         page = const DebugPage();
         break;
       default:
         throw UnimplementedError('no widget for $selectedIndex');
+    }
+
+    if (appState.forceMfkey32Page) {
+      appState.forceMfkey32Page = false;
+      page = const Mfkey32Page();
     }
 
     try {
@@ -296,7 +227,7 @@ class _MainPageState extends State<MainPage> {
                     .surface,
                 statusBarBrightness: Brightness.light,
                 statusBarIconBrightness: Brightness.dark)),
-      ).useCustomSystemFont(Brightness.light),
+      ),
       darkTheme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -312,7 +243,7 @@ class _MainPageState extends State<MainPage> {
                     .surface,
                 statusBarBrightness: Brightness.dark,
                 statusBarIconBrightness: Brightness.light)),
-      ).useCustomSystemFont(Brightness.dark),
+      ),
       themeMode: widget.sharedPreferencesProvider.getTheme(), // Dark Theme
       home: LayoutBuilder(// Build Page
           builder: (context, constraints) {
@@ -360,11 +291,6 @@ class _MainPageState extends State<MainPage> {
                                 icon: const Icon(Icons.system_update_alt),
                                 label: Text(
                                     AppLocalizations.of(context)!.write_card),
-                              ),
-                              NavigationRailDestination(
-                                icon: const Icon(Icons.handyman),
-                                label:
-                                    Text(AppLocalizations.of(context)!.tools),
                               ),
                               NavigationRailDestination(
                                 icon: const Icon(Icons.settings),

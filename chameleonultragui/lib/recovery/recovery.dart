@@ -4,7 +4,6 @@ import 'dart:ffi';
 import 'dart:io' as io;
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 import 'package:chameleonultragui/helpers/general.dart';
 import 'package:dylib/dylib.dart';
 import 'bindings.dart';
@@ -72,25 +71,6 @@ class StaticNestedDart {
       required this.nt1Enc});
 }
 
-class StaticEncryptedNestedDart {
-  int uid;
-  int nt;
-  int ntEnc;
-  int ntParEnc;
-
-  StaticEncryptedNestedDart(
-      {required this.uid,
-      required this.nt,
-      required this.ntEnc,
-      required this.ntParEnc});
-}
-
-class HardNestedDart {
-  Uint8List nonces;
-
-  HardNestedDart({required this.nonces});
-}
-
 class Mfkey32Dart {
   int uid;
   int nt0;
@@ -108,21 +88,6 @@ class Mfkey32Dart {
       required this.ar0Enc,
       required this.nr1Enc,
       required this.ar1Enc});
-}
-
-class Mfkey64Dart {
-  int uid;
-  int nt;
-  int nrEnc;
-  int arEnc;
-  int atEnc;
-
-  Mfkey64Dart(
-      {required this.uid,
-      required this.nt,
-      required this.nrEnc,
-      required this.arEnc,
-      required this.atEnc});
 }
 
 Future<List<int>> darkside(DarksideDart darkside) async {
@@ -145,16 +110,6 @@ Future<List<int>> nested(NestedDart nested) async {
   return completer.future;
 }
 
-Future<List<int>> hardNested(HardNestedDart nested) async {
-  final SendPort helperIsolateSendPort = await _helperIsolateSendPort;
-  final int requestId = _nextSumRequestId++;
-  final HardNestedRequest request = HardNestedRequest(requestId, nested);
-  final Completer<List<int>> completer = Completer<List<int>>();
-  requests[requestId] = completer;
-  helperIsolateSendPort.send(request);
-  return completer.future;
-}
-
 Future<List<int>> staticNested(StaticNestedDart nested) async {
   final SendPort helperIsolateSendPort = await _helperIsolateSendPort;
   final int requestId = _nextSumRequestId++;
@@ -165,32 +120,10 @@ Future<List<int>> staticNested(StaticNestedDart nested) async {
   return completer.future;
 }
 
-Future<List<int>> staticEncryptedNested(
-    StaticEncryptedNestedDart nested) async {
-  final SendPort helperIsolateSendPort = await _helperIsolateSendPort;
-  final int requestId = _nextSumRequestId++;
-  final StaticEncryptedNestedRequest request =
-      StaticEncryptedNestedRequest(requestId, nested);
-  final Completer<List<int>> completer = Completer<List<int>>();
-  requests[requestId] = completer;
-  helperIsolateSendPort.send(request);
-  return completer.future;
-}
-
 Future<List<int>> mfkey32(Mfkey32Dart mfkey) async {
   final SendPort helperIsolateSendPort = await _helperIsolateSendPort;
   final int requestId = _nextSumRequestId++;
   final Mfkey32Request request = Mfkey32Request(requestId, mfkey);
-  final Completer<List<int>> completer = Completer<List<int>>();
-  requests[requestId] = completer;
-  helperIsolateSendPort.send(request);
-  return completer.future;
-}
-
-Future<List<int>> mfkey64(Mfkey64Dart mfkey) async {
-  final SendPort helperIsolateSendPort = await _helperIsolateSendPort;
-  final int requestId = _nextSumRequestId++;
-  final Mfkey64Request request = Mfkey64Request(requestId, mfkey);
   final Completer<List<int>> completer = Completer<List<int>>();
   requests[requestId] = completer;
   helperIsolateSendPort.send(request);
@@ -249,32 +182,11 @@ class StaticNestedRequest {
   const StaticNestedRequest(this.id, this.nested);
 }
 
-class HardNestedRequest {
-  final int id;
-  final HardNestedDart nested;
-
-  const HardNestedRequest(this.id, this.nested);
-}
-
-class StaticEncryptedNestedRequest {
-  final int id;
-  final StaticEncryptedNestedDart nested;
-
-  const StaticEncryptedNestedRequest(this.id, this.nested);
-}
-
 class Mfkey32Request {
   final int id;
   final Mfkey32Dart mfkey32;
 
   const Mfkey32Request(this.id, this.mfkey32);
-}
-
-class Mfkey64Request {
-  final int id;
-  final Mfkey64Dart mfkey64;
-
-  const Mfkey64Request(this.id, this.mfkey64);
 }
 
 /// A response with the result of `sum`.
@@ -327,7 +239,7 @@ Future<SendPort> _helperIsolateSendPort = () async {
         // On the helper isolate listen to requests and respond to them.
         if (data is DarksideRequest) {
           Pointer<Darkside> pointer = calloc();
-          final itemPointer = calloc<DarksideItem>(data.darkside.items.length);
+          final itemPointer = calloc<DarksideItem>(256);
           pointer.ref.uid = data.darkside.uid;
           var i = 0;
           for (var item in data.darkside.items) {
@@ -342,7 +254,7 @@ Future<SendPort> _helperIsolateSendPort = () async {
           pointer.ref.items = itemPointer;
           pointer.ref.count = i;
 
-          Pointer<Uint32> count = calloc();
+          Pointer<Uint64> count = calloc();
           count.value = 0;
           List<int> keys = [];
           final Pointer<Uint64> result = _bindings.darkside(pointer, count);
@@ -387,18 +299,6 @@ Future<SendPort> _helperIsolateSendPort = () async {
           final KeyResponse response = KeyResponse(data.id, [result]);
           sendPort.send(response);
           return;
-        } else if (data is Mfkey64Request) {
-          Pointer<Mfkey64> pointer = calloc();
-          pointer.ref.uid = data.mfkey64.uid;
-          pointer.ref.nt = data.mfkey64.nt;
-          pointer.ref.nr_enc = data.mfkey64.nrEnc;
-          pointer.ref.ar_enc = data.mfkey64.arEnc;
-          pointer.ref.at_enc = data.mfkey64.atEnc;
-
-          final int result = _bindings.mfkey64(pointer);
-          final KeyResponse response = KeyResponse(data.id, [result]);
-          sendPort.send(response);
-          return;
         } else if (data is StaticNestedRequest) {
           Pointer<StaticNested> pointer = calloc();
           pointer.ref.uid = data.nested.uid;
@@ -416,40 +316,6 @@ Future<SendPort> _helperIsolateSendPort = () async {
           for (var i = 0; i < count.value; i++) {
             keys.add(result[i]);
           }
-          final KeyResponse response = KeyResponse(data.id, keys);
-          sendPort.send(response);
-          return;
-        } else if (data is StaticEncryptedNestedRequest) {
-          Pointer<StaticEncryptedNested> pointer = calloc();
-          pointer.ref.uid = data.nested.uid;
-          pointer.ref.nt = data.nested.nt;
-          pointer.ref.nt_enc = data.nested.ntEnc;
-          pointer.ref.nt_par_enc = data.nested.ntParEnc;
-
-          Pointer<Uint32> count = calloc();
-          count.value = 0;
-          List<int> keys = [];
-          final Pointer<Uint64> result =
-              _bindings.static_encrypted_nested(pointer, count);
-          for (var i = 0; i < count.value; i++) {
-            keys.add(result[i]);
-          }
-          final KeyResponse response = KeyResponse(data.id, keys);
-          sendPort.send(response);
-          return;
-        } else if (data is HardNestedRequest) {
-          Pointer<HardNested> pointer = calloc();
-          final Pointer<Uint8> uint8Ptr =
-              calloc<Uint8>(data.nested.nonces.length);
-          uint8Ptr
-              .asTypedList(data.nested.nonces.length)
-              .setAll(0, data.nested.nonces);
-          pointer.ref.nonces = uint8Ptr.cast<Char>();
-          pointer.ref.length = data.nested.nonces.length;
-
-          List<int> keys = [];
-          final int result = _bindings.hardnested(pointer);
-          keys.add(result);
           final KeyResponse response = KeyResponse(data.id, keys);
           sendPort.send(response);
           return;

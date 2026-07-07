@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
+import 'package:chameleonultragui/bridge/chameleon.dart';
 import 'package:chameleonultragui/gui/component/mifare/classic.dart';
 import 'package:chameleonultragui/gui/page/read_card.dart';
-import 'package:chameleonultragui/helpers/definitions.dart';
 import 'package:chameleonultragui/helpers/general.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/general.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/recovery.dart';
@@ -10,11 +10,13 @@ import 'package:chameleonultragui/helpers/mifare_classic/write/gen1.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/write/gen2.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/write/gen3.dart';
 import 'package:chameleonultragui/helpers/write.dart';
+import 'package:chameleonultragui/main.dart';
 import 'package:chameleonultragui/sharedprefsprovider.dart';
 import 'package:flutter/material.dart';
 
 // Localizations
 import 'package:chameleonultragui/generated/i18n/app_localizations.dart';
+import 'package:provider/provider.dart';
 
 class BaseMifareClassicWriteHelper extends AbstractWriteHelper {
   late MifareClassicRecovery recovery;
@@ -94,7 +96,9 @@ class BaseMifareClassicWriteHelper extends AbstractWriteHelper {
       CardSave card, Function(int writeProgress) update) async {
     List<Uint8List> data = card.data;
 
-    if (await communicator.scan14443aTag() == null) {
+    try {
+      await communicator.scan14443aTag();
+    } catch (e) {
       return false;
     }
 
@@ -148,9 +152,11 @@ class BaseMifareClassicWriteHelper extends AbstractWriteHelper {
 
   @override
   Future<bool> isCompatible(CardSave card) async {
-    CardData? magicCard = await communicator.scan14443aTag();
+    CardData magicCard;
 
-    if (magicCard == null) {
+    try {
+      magicCard = await communicator.scan14443aTag();
+    } catch (_) {
       return false;
     }
 
@@ -177,6 +183,8 @@ class BaseMifareClassicWriteHelper extends AbstractWriteHelper {
   Future<void> reset() async {
     hfInfo = null;
     mfcInfo = null;
+    recovery = MifareClassicRecovery(
+        appState: recovery.appState, update: recovery.update);
   }
 
   @override
@@ -184,28 +192,69 @@ class BaseMifareClassicWriteHelper extends AbstractWriteHelper {
     var localizations = AppLocalizations.of(context)!;
 
     Future<void> prepareMifareClassic() async {
-      setState(() {
-        hfInfo = null;
-        mfcInfo = null;
-      });
+      var appState = Provider.of<ChameleonGUIState>(context, listen: false);
 
-      var info = await readHFInfo(
-          context,
-          () => {
-                if (mfcInfo != null && mfcInfo!.recovery != null)
-                  setState(() {
-                    recovery = mfcInfo!.recovery!;
-                  })
-              });
+      if (!await appState.communicator!.isReaderDeviceMode()) {
+        await appState.communicator!.setReaderDeviceMode(true);
+      }
 
-      setState(() {
-        hfInfo = info.$1;
-        mfcInfo = info.$2;
-      });
+      try {
+        CardData card = await appState.communicator!.scan14443aTag();
+        bool isMifareClassic = false;
+        MifareClassicType mifareClassicType = MifareClassicType.none;
 
-      if (isMifareClassic(hfInfo!.type)) {
+        try {
+          isMifareClassic = await appState.communicator!.detectMf1Support();
+          mifareClassicType = await mfClassicGetType(appState.communicator!);
+        } catch (_) {}
+
+        bool isMifareClassicEV1 = isMifareClassic
+            ? (await appState.communicator!
+                .mf1Auth(0x45, 0x61, gMifareClassicKeys[3]))
+            : false;
+
         setState(() {
-          recovery = info.$2.recovery!;
+          hfInfo = HFCardInfo();
+          mfcInfo = MifareClassicInfo();
+        });
+
+        if (isMifareClassic) {
+          setState(() {
+            mfcInfo!.recovery = getExtraData()[0];
+          });
+        } else {
+          setState(() {
+            hfInfo!.cardExist = false;
+          });
+
+          return;
+        }
+
+        setState(() {
+          hfInfo!.uid = bytesToHexSpace(card.uid);
+          hfInfo!.sak =
+              card.sak.toRadixString(16).padLeft(2, '0').toUpperCase();
+          hfInfo!.atqa = bytesToHexSpace(card.atqa);
+          hfInfo!.ats = (card.ats.isNotEmpty)
+              ? bytesToHexSpace(card.ats)
+              : localizations.no;
+          mfcInfo!.isEV1 = isMifareClassicEV1;
+          mfcInfo!.type = mifareClassicType;
+          mfcInfo!.state = (mfcInfo!.type != MifareClassicType.none)
+              ? MifareClassicState.checkKeys
+              : MifareClassicState.none;
+          hfInfo!.tech = isMifareClassic
+              ? "Mifare Classic ${mfClassicGetName(mfcInfo!.type)}${isMifareClassicEV1 ? " EV1" : ""}"
+              : localizations.other;
+        });
+      } catch (_) {
+        setState(() {
+          hfInfo = HFCardInfo();
+          mfcInfo = MifareClassicInfo();
+        });
+
+        setState(() {
+          hfInfo!.cardExist = false;
         });
       }
     }

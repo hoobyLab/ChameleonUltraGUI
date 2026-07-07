@@ -11,12 +11,8 @@ class AndroidSerial extends AbstractSerial {
   late BLESerial bleSerial = BLESerial(log: log);
   late MobileSerial mobileSerial = MobileSerial(log: log);
   Future<bool>? permissionRequestFuture;
-  late bool hasAllPermissions = true;
 
-  AndroidSerial({required super.log}) {
-    bleSerial.connectionStateCallback = notifyConnectionStateChanged;
-    mobileSerial.connectionStateCallback = notifyConnectionStateChanged;
-  }
+  AndroidSerial({required super.log});
 
   @override
   Future<bool> performDisconnect() async {
@@ -35,8 +31,7 @@ class AndroidSerial extends AbstractSerial {
     List<Chameleon> output = [];
 
     output.addAll(await mobileSerial.availableChameleons(onlyDFU));
-    hasAllPermissions = await checkPermissions();
-    if (hasAllPermissions) {
+    if (await checkPermissions()) {
       output.addAll(await bleSerial.availableChameleons(onlyDFU));
     }
 
@@ -44,11 +39,11 @@ class AndroidSerial extends AbstractSerial {
   }
 
   @override
-  Future<bool> connectSpecificDevice(dynamic devicePort) async {
+  Future<bool> connectSpecificDevice(devicePort) async {
     if (devicePort.contains(":")) {
-      return await bleSerial.connectSpecificDevice(devicePort);
+      return bleSerial.connectSpecificDevice(devicePort);
     } else {
-      return await mobileSerial.connectSpecificDevice(devicePort);
+      return mobileSerial.connectSpecificDevice(devicePort);
     }
   }
 
@@ -82,22 +77,17 @@ class AndroidSerial extends AbstractSerial {
   @override
   Future<bool> write(Uint8List command, {bool firmware = false}) async {
     if (bleSerial.connected) {
-      return await bleSerial.write(command, firmware: firmware);
+      return bleSerial.write(command, firmware: firmware);
     } else {
-      return await mobileSerial.write(command, firmware: firmware);
+      return mobileSerial.write(command, firmware: firmware);
     }
   }
 
   @override
   Future<void> registerCallback(dynamic callback) async {
-    await bleSerial.registerCallback(callback);
-    await mobileSerial.registerCallback(callback);
+    bleSerial.messageCallback = callback;
+    mobileSerial.messageCallback = callback;
   }
-
-  @override
-  dynamic get activeDevicePort => (bleSerial.connected)
-      ? bleSerial.activeDevicePort
-      : mobileSerial.activeDevicePort;
 
   @override
   ChameleonDevice get device =>

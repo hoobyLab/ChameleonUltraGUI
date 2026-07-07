@@ -123,7 +123,7 @@ class BLESerial extends AbstractSerial {
   }
 
   @override
-  Future<bool> connectSpecificDevice(dynamic devicePort) async {
+  Future<bool> connectSpecificDevice(devicePort) async {
     // As BLE is unstable, we try to connect 5 times
     // And fail only then
     bool ret = false;
@@ -137,7 +137,7 @@ class BLESerial extends AbstractSerial {
     return ret;
   }
 
-  Future<bool> connectSpecificInternal(dynamic devicePort) async {
+  Future<bool> connectSpecificInternal(devicePort) async {
     Completer<bool> completer = Completer<bool>();
     List<Uuid> services = [nrfUUID, uartRX, uartTX];
     if (chameleonMap[devicePort]!.dfu) {
@@ -190,7 +190,6 @@ class BLESerial extends AbstractSerial {
 
           portName = devicePort;
           device = chameleonMap[devicePort]!.device;
-          activeDevicePort = devicePort;
 
           isDFU = true;
           completer.complete(true);
@@ -223,23 +222,11 @@ class BLESerial extends AbstractSerial {
           try {
             await flutterReactiveBle.writeCharacteristicWithResponse(
                 rxCharacteristic!,
-                value: Uint8List.fromList([
-                  0x11,
-                  0xef,
-                  0x03,
-                  0xfb,
-                  0x00,
-                  0x00,
-                  0x00,
-                  0x00,
-                  0x02,
-                  0x00
-                ]));
+                value: Uint8List(0));
 
             connected = true;
             portName = devicePort;
             device = chameleonMap[devicePort]!.device;
-            activeDevicePort = devicePort;
 
             connectionType = ConnectionType.ble;
             isDFU = false;
@@ -268,25 +255,17 @@ class BLESerial extends AbstractSerial {
 
   @override
   Future<bool> performDisconnect() async {
-    final hadState = hasConnectionState || connection != null;
-    resetConnectionState();
-    txCharacteristic = null;
-    rxCharacteristic = null;
-    firmwareCharacteristic = null;
-    receivedDataStream = null;
+    device = ChameleonDevice.none;
+    connectionType = ConnectionType.none;
+    isOpen = false;
+    messageCallback = null;
+    pendingConnection = false;
     if (connection != null) {
       await connection!.cancel();
-      connection = null;
       connected = false;
-      if (hadState) {
-        notifyConnectionStateChanged();
-      }
       return true;
     }
     connected = false; // For debug button
-    if (hadState) {
-      notifyConnectionStateChanged();
-    }
     return false;
   }
 

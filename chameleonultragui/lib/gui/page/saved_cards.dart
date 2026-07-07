@@ -1,28 +1,25 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:chameleonultragui/bridge/chameleon.dart';
 import 'package:chameleonultragui/gui/component/card_button.dart';
-import 'package:chameleonultragui/gui/component/element_button.dart';
-import 'package:chameleonultragui/gui/menu/dialogs/card/view.dart';
-import 'package:chameleonultragui/gui/menu/dialogs/dictionary/edit.dart';
-import 'package:chameleonultragui/gui/menu/dialogs/dictionary/view.dart';
-import 'package:chameleonultragui/helpers/card_save_converters.dart';
-import 'package:chameleonultragui/helpers/definitions.dart';
+import 'package:chameleonultragui/gui/component/saved_card.dart';
+import 'package:chameleonultragui/gui/menu/dictionary_edit.dart';
+import 'package:chameleonultragui/gui/menu/card_view.dart';
 import 'package:chameleonultragui/helpers/general.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/general.dart';
-import 'package:chameleonultragui/helpers/mifare_ultralight/general.dart';
-import 'package:chameleonultragui/helpers/validators.dart';
 import 'package:chameleonultragui/main.dart';
 import 'package:chameleonultragui/sharedprefsprovider.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:file_saver/file_saver.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
-import 'package:path/path.dart';
 import 'package:provider/provider.dart';
-import 'package:chameleonultragui/gui/menu/dialogs/card/edit.dart';
-import 'package:chameleonultragui/gui/menu/dialogs/card/create.dart';
-import 'package:chameleonultragui/gui/menu/dialogs/confirm_delete.dart';
+import 'package:chameleonultragui/gui/menu/card_edit.dart';
+import 'package:chameleonultragui/gui/menu/dictionary_view.dart';
+import 'package:uuid/uuid.dart';
+import 'package:chameleonultragui/gui/menu/confirm_delete.dart';
 
 // Localizations
 import 'package:chameleonultragui/generated/i18n/app_localizations.dart';
@@ -35,7 +32,148 @@ class SavedCardsPage extends StatefulWidget {
 }
 
 class SavedCardsPageState extends State<SavedCardsPage> {
-  TagType selectedType = TagType.unknown;
+  MifareClassicType selectedType = MifareClassicType.m1k;
+
+  CardSave pm3JsonToCardSave(String json) {
+    Map<String, dynamic> data = jsonDecode(json);
+
+    final String id = const Uuid().v4();
+    final String uid = data['Card']['UID'] as String;
+    String sakString = data['Card']['SAK'] as String;
+    final int sak = hexToBytes(sakString)[0];
+    String atqaString = data['Card']['ATQA'] as String;
+    final List<int> atqa = [
+      int.parse(atqaString.substring(2), radix: 16),
+      int.parse(atqaString.substring(0, 2), radix: 16)
+    ];
+    final List<int> ats = [];
+    final String name = uid;
+    const Color color = Colors.deepOrange;
+    final TagType tag;
+    List<Uint8List> tagData = [];
+
+    List<String> blocks = [];
+    Map<String, dynamic> blockData = data['blocks'] as Map<String, dynamic>;
+    for (int i = 0; blockData.containsKey(i.toString()); i++) {
+      blocks.add(blockData[i.toString()] as String);
+    }
+
+    //Check if a block has more than 16 Bytes, Ultralight, return as unknown
+    if (blocks[0].length > 32) {
+      tag = TagType.unknown;
+    } else {
+      tag = mfClassicGetChameleonTagType(
+          mfClassicGetCardTypeByBlockCount(blocks.length));
+    }
+
+    for (var block in blocks) {
+      tagData.add(hexToBytes(block));
+    }
+
+    return CardSave(
+        id: id,
+        uid: uid,
+        sak: sak,
+        name: name,
+        tag: tag,
+        data: tagData,
+        color: color,
+        ats: Uint8List.fromList(ats),
+        atqa: Uint8List.fromList(atqa));
+  }
+
+  CardSave flipperNfcToCardSave(String data) {
+    final String id = const Uuid().v4();
+    final String uid =
+        RegExp(r'UID:\s+([\dA-Fa-f ]+)').firstMatch(data)!.group(1)!;
+    final int sak = hexToBytes(
+        RegExp(r'SAK:\s+([\dA-Fa-f ]+)').firstMatch(data)!.group(1)!)[0];
+    String atqaString =
+        RegExp(r'ATQA:\s+([\dA-Fa-f ]+)').firstMatch(data)!.group(1)!;
+    final List<int> atqa = [
+      int.parse(atqaString.substring(0, 2), radix: 16),
+      int.parse(atqaString.substring(2), radix: 16)
+    ];
+    final List<int> ats = [];
+    final String name = uid;
+    const Color color = Colors.deepOrange;
+    final TagType tag;
+    List<Uint8List> tagData = [];
+    List<String> blocks = [];
+    for (var block in data.split("\n")) {
+      if (block.startsWith("Block")) {
+        blocks.add(block.split(":")[1].trim().replaceAll('?', '0'));
+      }
+    }
+
+    //Check if a block has more than 16 Bytes, Ultralight, return as unknown
+    if (blocks[0].replaceAll(' ', '').length > 32) {
+      tag = TagType.unknown;
+    } else {
+      tag = mfClassicGetChameleonTagType(
+          mfClassicGetCardTypeByBlockCount(blocks.length));
+    }
+
+    for (var block in blocks) {
+      tagData.add(hexToBytes(block));
+    }
+
+    return CardSave(
+        id: id,
+        uid: uid,
+        sak: sak,
+        name: name,
+        tag: tag,
+        data: tagData,
+        color: color,
+        ats: Uint8List.fromList(ats),
+        atqa: Uint8List.fromList(atqa));
+  }
+
+  CardSave mctToCardSave(String data) {
+    final String id = const Uuid().v4();
+    final String uid = data.split("\n")[1].substring(0, 8);
+    final int sak = hexToBytes(data.split("\n")[1].substring(10, 12))[0];
+    String atqaString = data.split("\n")[1].substring(12, 16);
+    final List<int> atqa = [
+      int.parse(atqaString.substring(2), radix: 16),
+      int.parse(atqaString.substring(0, 2), radix: 16)
+    ];
+    final List<int> ats = [];
+    final String name = uid;
+    const Color color = Colors.deepOrange;
+    final TagType tag;
+    List<Uint8List> tagData = [];
+    List<String> blocks = [];
+    for (var block in data.split("\n")) {
+      if (!block.startsWith("+Sector")) {
+        blocks.add(block.trim());
+      }
+    }
+
+    //Check if a block has more than 16 Bytes, Ultralight, return as unknown
+    if (blocks[0].replaceAll(' ', '').length > 32) {
+      tag = TagType.unknown;
+    } else {
+      tag = mfClassicGetChameleonTagType(
+          mfClassicGetCardTypeByBlockCount(blocks.length));
+    }
+
+    for (var block in blocks) {
+      tagData.add(hexToBytes(block));
+    }
+
+    return CardSave(
+        id: id,
+        uid: uid,
+        sak: sak,
+        name: name,
+        tag: tag,
+        data: tagData,
+        color: color,
+        ats: Uint8List.fromList(ats),
+        atqa: Uint8List.fromList(atqa));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,42 +181,6 @@ class SavedCardsPageState extends State<SavedCardsPage> {
     var dictionaries = appState.sharedPreferencesProvider.getDictionaries();
     var tags = appState.sharedPreferencesProvider.getCards();
     var localizations = AppLocalizations.of(context)!;
-    final isCompact = MediaQuery.of(context).size.width < 700;
-    late VoidCallback importCard;
-    late VoidCallback createCard;
-    late VoidCallback importDictionary;
-
-    Widget sectionHeader(String title, List<Widget> actions) {
-      return Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: isCompact
-            ? Row(
-                children: [
-                  SizedBox(width: actions.length * 48),
-                  Expanded(
-                    child: Text(
-                      title,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  Row(mainAxisSize: MainAxisSize.min, children: actions),
-                ],
-              )
-            : Text(
-                title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-      );
-    }
-
     return Scaffold(
       appBar: AppBar(
         title: Text(localizations.saved_cards),
@@ -88,515 +190,262 @@ class SavedCardsPageState extends State<SavedCardsPage> {
           Expanded(
             child: Card(
                 child: Column(children: [
-              sectionHeader(
-                localizations.cards,
-                [
-                  IconButton(
-                    onPressed: () => importCard(),
-                    icon: const Icon(Icons.file_upload),
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  localizations.cards,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
                   ),
-                  IconButton(
-                    onPressed: () => createCard(),
-                    icon: const Icon(Icons.add),
-                  ),
-                ],
+                ),
               ),
-              Visibility(
-                visible: !isCompact,
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        constraints: const BoxConstraints(maxHeight: 100),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: importCard = () async {
-                                  PlatformFile? result =
-                                      await FilePicker.pickFile();
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  constraints: const BoxConstraints(maxHeight: 100),
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      FilePickerResult? result =
+                          await FilePicker.pickFiles();
 
-                                  if (result != null) {
-                                    File file = File(result.path!);
-                                    var contents = await file.readAsBytes();
-                                    try {
-                                      var string =
-                                          const Utf8Decoder().convert(contents);
+                      if (result != null) {
+                        File file = File(result.files.single.path!);
+                        var contents = await file.readAsBytes();
+                        try {
+                          var string = const Utf8Decoder().convert(contents);
+                          var tags =
+                              appState.sharedPreferencesProvider.getCards();
+                          CardSave tag;
+                          if (string.contains("\"Created\": \"proxmark3\",")) {
+                            // PM3 JSON
+                            tag = pm3JsonToCardSave(string);
+                          } else if (string
+                              .contains("Filetype: Flipper NFC device")) {
+                            // Flipper NFC
+                            tag = flipperNfcToCardSave(string);
+                          } else if (string.contains("+Sector: 0")) {
+                            // Mifare Classic Tool
+                            tag = mctToCardSave(string);
+                          } else {
+                            tag = CardSave.fromJson(string);
+                          }
+
+                          tags.add(tag);
+                          appState.sharedPreferencesProvider.setCards(tags);
+                          appState.changesMade();
+                        } catch (_) {
+                          var uid4 = contents.sublist(0, 4);
+                          var uid7 = contents.sublist(0, 7);
+                          var uid4sak = contents[5];
+                          var uid4atqa =
+                              Uint8List.fromList([contents[7], contents[6]]);
+
+                          final uid4Controller = TextEditingController(
+                              text: bytesToHexSpace(uid4));
+                          final sak4Controller = TextEditingController(
+                              text: bytesToHex(Uint8List.fromList([uid4sak])));
+                          final atqa4Controller = TextEditingController(
+                              text: bytesToHexSpace(uid4atqa));
+                          final uid7Controller = TextEditingController(
+                              text: bytesToHexSpace(uid7));
+                          final sak7Controller =
+                              TextEditingController(text: "");
+                          final atqa7Controller =
+                              TextEditingController(text: "");
+                          final nameController =
+                              TextEditingController(text: "");
+
+                          if (!context.mounted) {
+                            return;
+                          }
+
+                          await showDialog(
+                            context: context,
+                            builder: (BuildContext context) {
+                              return AlertDialog(
+                                title: Text(localizations.correct_tag_data),
+                                content: StatefulBuilder(builder:
+                                    (BuildContext context,
+                                        StateSetter setState) {
+                                  return SingleChildScrollView(
+                                      child: Column(children: [
+                                    Column(children: [
+                                      const SizedBox(height: 20),
+                                      Text(localizations.uid_len(4)),
+                                      const SizedBox(height: 10),
+                                      TextFormField(
+                                        controller: uid4Controller,
+                                        decoration: InputDecoration(
+                                            labelText: localizations.uid,
+                                            hintText: localizations
+                                                .enter_something("UID")),
+                                      ),
+                                      const SizedBox(height: 20),
+                                      TextFormField(
+                                        controller: sak4Controller,
+                                        decoration: InputDecoration(
+                                            labelText: localizations.sak,
+                                            hintText: localizations
+                                                .enter_something("SAK")),
+                                      ),
+                                      const SizedBox(height: 20),
+                                      TextFormField(
+                                        controller: atqa4Controller,
+                                        decoration: InputDecoration(
+                                            labelText: localizations.atqa,
+                                            hintText: localizations
+                                                .enter_something("ATQA")),
+                                      ),
+                                      const SizedBox(height: 40),
+                                    ]),
+                                    Column(children: [
+                                      Text(localizations.uid_len(7)),
+                                      const SizedBox(height: 10),
+                                      TextFormField(
+                                        controller: uid7Controller,
+                                        decoration: InputDecoration(
+                                            labelText: localizations.uid,
+                                            hintText: localizations
+                                                .enter_something("UID")),
+                                      ),
+                                      const SizedBox(height: 20),
+                                      TextFormField(
+                                        controller: sak7Controller,
+                                        decoration: InputDecoration(
+                                            labelText: localizations.sak,
+                                            hintText: localizations
+                                                .enter_something("SAK (08)")),
+                                      ),
+                                      const SizedBox(height: 20),
+                                      TextFormField(
+                                        controller: atqa7Controller,
+                                        decoration: InputDecoration(
+                                            labelText: localizations.atqa,
+                                            hintText:
+                                                localizations.enter_something(
+                                                    "ATQA (00 44)")),
+                                      ),
+                                      const SizedBox(height: 40)
+                                    ]),
+                                    TextFormField(
+                                      controller: nameController,
+                                      decoration: InputDecoration(
+                                          labelText: localizations.name,
+                                          hintText:
+                                              localizations.enter_name_of_card),
+                                    ),
+                                    DropdownButton<MifareClassicType>(
+                                      value: selectedType,
+                                      items: [
+                                        MifareClassicType.m1k,
+                                        MifareClassicType.m2k,
+                                        MifareClassicType.m4k,
+                                        MifareClassicType.mini
+                                      ].map<
+                                              DropdownMenuItem<
+                                                  MifareClassicType>>(
+                                          (MifareClassicType type) {
+                                        return DropdownMenuItem<
+                                            MifareClassicType>(
+                                          value: type,
+                                          child: Text(
+                                              "Mifare Classic ${mfClassicGetName(type)}"),
+                                        );
+                                      }).toList(),
+                                      onChanged: (MifareClassicType? newValue) {
+                                        setState(() {
+                                          selectedType = newValue!;
+                                        });
+                                        appState.changesMade();
+                                      },
+                                    )
+                                  ]));
+                                }),
+                                actions: [
+                                  ElevatedButton(
+                                    onPressed: () async {
+                                      List<Uint8List> blocks = [];
+                                      for (var i = 0;
+                                          i < contents.length;
+                                          i += 16) {
+                                        if (i + 16 > contents.length) {
+                                          break;
+                                        }
+                                        blocks.add(contents.sublist(i, i + 16));
+                                      }
                                       var tags = appState
                                           .sharedPreferencesProvider
                                           .getCards();
-                                      CardSave tag;
-                                      if (string.contains(
-                                          "\"Created\": \"proxmark3\",")) {
-                                        // PM3 JSON
-                                        tag = pm3JsonToCardSave(string);
-                                      } else if (string.contains(
-                                          "Filetype: Flipper NFC device")) {
-                                        // Flipper NFC
-                                        tag = flipperNfcToCardSave(string);
-                                      } else if (string
-                                          .contains("+Sector: 0")) {
-                                        // Mifare Classic Tool
-                                        tag = mctToCardSave(string);
-                                      } else if (string.contains(
-                                          "Filetype: Flipper RFID key")) {
-                                        // Flipper RFID
-                                        tag = flipperRfidToCardSave(string);
-                                      } else {
-                                        tag = CardSave.fromJson(string);
-                                      }
-
-                                      tag.name = basename(file.path)
-                                              .contains('.')
-                                          ? basename(file.path).split('.')[0]
-                                          : basename(file.path);
+                                      var tag = CardSave(
+                                          name: nameController.text,
+                                          sak: hexToBytes(
+                                              sak4Controller.text)[0],
+                                          atqa:
+                                              hexToBytes(atqa4Controller.text),
+                                          uid: uid4Controller.text,
+                                          tag: mfClassicGetChameleonTagType(
+                                              selectedType),
+                                          data: blocks);
                                       tags.add(tag);
                                       appState.sharedPreferencesProvider
                                           .setCards(tags);
                                       appState.changesMade();
-                                    } catch (_) {
-                                      selectedType =
-                                          getTagTypeByDumpSize(contents.length);
-
-                                      if (selectedType == TagType.unknown) {
-                                        return;
+                                      Navigator.pop(context);
+                                    },
+                                    child: Text(localizations
+                                        .save_as(localizations.x_byte_uid(4))),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () async {
+                                      List<Uint8List> blocks = [];
+                                      for (var i = 0;
+                                          i < contents.length;
+                                          i += 16) {
+                                        blocks.add(contents.sublist(i, i + 16));
                                       }
-
-                                      bool hasUid4Support = false;
-                                      Uint8List uid4 = Uint8List(0);
-                                      Uint8List uid7 = Uint8List(0);
-                                      int uid4Sak = 0;
-                                      Uint8List uid4Atqa = Uint8List(0);
-                                      int uid7Sak = 0;
-                                      Uint8List uid7Atqa = Uint8List(0);
-
-                                      if (isMifareClassic(selectedType)) {
-                                        hasUid4Support = true;
-                                        uid4 = contents.sublist(0, 4);
-                                        uid7 = contents.sublist(0, 7);
-                                        uid4Sak = contents[5];
-                                        uid4Atqa = Uint8List.fromList(
-                                            [contents[7], contents[6]]);
-                                      } else if (isMifareUltralight(
-                                          selectedType)) {
-                                        uid7Atqa =
-                                            Uint8List.fromList([0x00, 0x44]);
-                                        uid7 = Uint8List.fromList([
-                                          ...contents.sublist(0, 3),
-                                          ...contents.sublist(4, 8)
-                                        ]);
-                                      }
-
-                                      final uid4Controller =
-                                          TextEditingController(
-                                              text: bytesToHexSpace(uid4));
-                                      final sak4Controller =
-                                          TextEditingController(
-                                              text: bytesToHex(
-                                                  Uint8List.fromList(
-                                                      [uid4Sak])));
-                                      final atqa4Controller =
-                                          TextEditingController(
-                                              text: bytesToHexSpace(uid4Atqa));
-                                      final uid7Controller =
-                                          TextEditingController(
-                                              text: bytesToHexSpace(uid7));
-                                      final sak7Controller =
-                                          TextEditingController(
-                                              text: bytesToHex(
-                                                  Uint8List.fromList(
-                                                      [uid7Sak])));
-                                      final atqa7Controller =
-                                          TextEditingController(
-                                              text: bytesToHexSpace(uid7Atqa));
-                                      final nameController =
-                                          TextEditingController(text: "");
-
-                                      if (!context.mounted) {
-                                        return;
-                                      }
-
-                                      await showDialog(
-                                        context: context,
-                                        builder: (BuildContext context) {
-                                          return AlertDialog(
-                                            title: Text(
-                                                localizations.correct_tag_data),
-                                            content: StatefulBuilder(builder:
-                                                (BuildContext context,
-                                                    StateSetter setState) {
-                                              return SingleChildScrollView(
-                                                  child: Column(children: [
-                                                if (hasUid4Support)
-                                                  Column(children: [
-                                                    const SizedBox(height: 20),
-                                                    Text(localizations
-                                                        .uid_len(4)),
-                                                    const SizedBox(height: 10),
-                                                    TextFormField(
-                                                      controller:
-                                                          uid4Controller,
-                                                      inputFormatters:
-                                                          hexFormatter,
-                                                      validator: (value) =>
-                                                          validateHex(
-                                                        value,
-                                                        localizations,
-                                                        exactBytes: 4,
-                                                        fieldName:
-                                                            localizations.uid,
-                                                      ),
-                                                      decoration: InputDecoration(
-                                                          labelText:
-                                                              localizations.uid,
-                                                          hintText: localizations
-                                                              .enter_something(
-                                                                  "UID")),
-                                                    ),
-                                                    const SizedBox(height: 20),
-                                                    TextFormField(
-                                                      controller:
-                                                          sak4Controller,
-                                                      inputFormatters:
-                                                          hexFormatter,
-                                                      validator: (value) =>
-                                                          validateHex(
-                                                        value,
-                                                        localizations,
-                                                        exactBytes: 1,
-                                                        fieldName:
-                                                            localizations.sak,
-                                                      ),
-                                                      decoration: InputDecoration(
-                                                          labelText:
-                                                              localizations.sak,
-                                                          hintText: localizations
-                                                              .enter_something(
-                                                                  "SAK")),
-                                                    ),
-                                                    const SizedBox(height: 20),
-                                                    TextFormField(
-                                                      controller:
-                                                          atqa4Controller,
-                                                      inputFormatters:
-                                                          hexFormatter,
-                                                      validator: (value) =>
-                                                          validateHex(
-                                                        value,
-                                                        localizations,
-                                                        exactBytes: 2,
-                                                        fieldName:
-                                                            localizations.atqa,
-                                                      ),
-                                                      decoration: InputDecoration(
-                                                          labelText:
-                                                              localizations
-                                                                  .atqa,
-                                                          hintText: localizations
-                                                              .enter_something(
-                                                                  "ATQA")),
-                                                    ),
-                                                    const SizedBox(height: 40),
-                                                  ]),
-                                                Column(children: [
-                                                  Text(
-                                                      localizations.uid_len(7)),
-                                                  const SizedBox(height: 10),
-                                                  TextFormField(
-                                                    controller: uid7Controller,
-                                                    inputFormatters:
-                                                        hexFormatter,
-                                                    validator: (value) =>
-                                                        validateHex(
-                                                      value,
-                                                      localizations,
-                                                      exactBytes: 7,
-                                                      fieldName:
-                                                          localizations.uid,
-                                                    ),
-                                                    decoration: InputDecoration(
-                                                        labelText:
-                                                            localizations.uid,
-                                                        hintText: localizations
-                                                            .enter_something(
-                                                                "UID")),
-                                                  ),
-                                                  const SizedBox(height: 20),
-                                                  TextFormField(
-                                                    controller: sak7Controller,
-                                                    inputFormatters:
-                                                        hexFormatter,
-                                                    validator: (value) =>
-                                                        validateHex(
-                                                      value,
-                                                      localizations,
-                                                      exactBytes: 1,
-                                                      fieldName:
-                                                          localizations.sak,
-                                                    ),
-                                                    decoration: InputDecoration(
-                                                        labelText:
-                                                            localizations.sak,
-                                                        hintText: localizations
-                                                            .enter_something(
-                                                                "SAK")),
-                                                  ),
-                                                  const SizedBox(height: 20),
-                                                  TextFormField(
-                                                    controller: atqa7Controller,
-                                                    inputFormatters:
-                                                        hexFormatter,
-                                                    validator: (value) =>
-                                                        validateHex(
-                                                      value,
-                                                      localizations,
-                                                      exactBytes: 2,
-                                                      fieldName:
-                                                          localizations.atqa,
-                                                    ),
-                                                    decoration: InputDecoration(
-                                                        labelText:
-                                                            localizations.atqa,
-                                                        hintText: localizations
-                                                            .enter_something(
-                                                                "ATQA")),
-                                                  ),
-                                                  const SizedBox(height: 40)
-                                                ]),
-                                                TextFormField(
-                                                  controller: nameController,
-                                                  validator: (value) =>
-                                                      validateName(
-                                                          value, localizations),
-                                                  decoration: InputDecoration(
-                                                      labelText:
-                                                          localizations.name,
-                                                      hintText: localizations
-                                                          .enter_name_of_card),
-                                                ),
-                                                DropdownButton<TagType>(
-                                                  value: selectedType,
-                                                  items: getTagTypesByFrequency(
-                                                          TagFrequency.hf)
-                                                      .map<
-                                                              DropdownMenuItem<
-                                                                  TagType>>(
-                                                          (TagType type) {
-                                                    return DropdownMenuItem<
-                                                        TagType>(
-                                                      value: type,
-                                                      child: Text(
-                                                          chameleonTagToString(
-                                                              type,
-                                                              localizations)),
-                                                    );
-                                                  }).toList(),
-                                                  onChanged:
-                                                      (TagType? newValue) {
-                                                    setState(() {
-                                                      selectedType = newValue!;
-                                                    });
-                                                    appState.changesMade();
-                                                  },
-                                                )
-                                              ]));
-                                            }),
-                                            actions: [
-                                              if (hasUid4Support)
-                                                ElevatedButton(
-                                                  onPressed: () async {
-                                                    List<Uint8List> blocks = [];
-                                                    int blockSize =
-                                                        isMifareClassic(
-                                                                selectedType)
-                                                            ? 16
-                                                            : 4;
-
-                                                    for (var i = 0;
-                                                        i < contents.length;
-                                                        i += blockSize) {
-                                                      if (i + blockSize >
-                                                          contents.length) {
-                                                        break;
-                                                      }
-                                                      blocks.add(
-                                                          contents.sublist(i,
-                                                              i + blockSize));
-                                                    }
-
-                                                    var tags = appState
-                                                        .sharedPreferencesProvider
-                                                        .getCards();
-
-                                                    if (sak4Controller
-                                                                .text.length !=
-                                                            2 ||
-                                                        atqa4Controller
-                                                                .text.length !=
-                                                            5) {
-                                                      return showDialog(
-                                                        context: context,
-                                                        barrierDismissible:
-                                                            true,
-                                                        builder: (_) =>
-                                                            AlertDialog(
-                                                                title: Text(
-                                                                    localizations
-                                                                        .error),
-                                                                actions: [
-                                                                  ElevatedButton(
-                                                                    onPressed:
-                                                                        () {
-                                                                      Navigator.pop(
-                                                                          context);
-                                                                    },
-                                                                    child: Text(
-                                                                        localizations
-                                                                            .ok),
-                                                                  ),
-                                                                ],
-                                                                content: Text(
-                                                                    localizations
-                                                                        .invalid_input)),
-                                                      );
-                                                    }
-
-                                                    var tag = CardSave(
-                                                        name:
-                                                            nameController.text,
-                                                        sak: hexToBytes(
-                                                            sak4Controller
-                                                                .text)[0],
-                                                        atqa: hexToBytes(
-                                                            atqa4Controller
-                                                                .text),
-                                                        uid:
-                                                            uid4Controller.text,
-                                                        tag: selectedType,
-                                                        data: blocks);
-                                                    tags.add(tag);
-                                                    appState
-                                                        .sharedPreferencesProvider
-                                                        .setCards(tags);
-                                                    appState.changesMade();
-                                                    Navigator.pop(context);
-                                                  },
-                                                  child: Text(localizations
-                                                      .save_as(localizations
-                                                          .x_byte_uid(4))),
-                                                ),
-                                              ElevatedButton(
-                                                onPressed: () async {
-                                                  List<Uint8List> blocks = [];
-                                                  int blockSize =
-                                                      isMifareClassic(
-                                                              selectedType)
-                                                          ? 16
-                                                          : 4;
-
-                                                  for (var i = 0;
-                                                      i < contents.length;
-                                                      i += blockSize) {
-                                                    blocks.add(contents.sublist(
-                                                        i, i + blockSize));
-                                                  }
-
-                                                  var tags = appState
-                                                      .sharedPreferencesProvider
-                                                      .getCards();
-
-                                                  if (sak7Controller
-                                                              .text.length !=
-                                                          2 ||
-                                                      atqa7Controller
-                                                              .text.length !=
-                                                          5) {
-                                                    return showDialog(
-                                                      context: context,
-                                                      barrierDismissible: true,
-                                                      builder: (_) =>
-                                                          AlertDialog(
-                                                              title: Text(
-                                                                  localizations
-                                                                      .error),
-                                                              actions: [
-                                                                ElevatedButton(
-                                                                  onPressed:
-                                                                      () {
-                                                                    Navigator.pop(
-                                                                        context);
-                                                                  },
-                                                                  child: Text(
-                                                                      localizations
-                                                                          .ok),
-                                                                ),
-                                                              ],
-                                                              content: Text(
-                                                                  localizations
-                                                                      .invalid_input)),
-                                                    );
-                                                  }
-
-                                                  var tag = CardSave(
-                                                      name: nameController.text,
-                                                      sak: hexToBytes(
-                                                          sak7Controller
-                                                              .text)[0],
-                                                      atqa: hexToBytes(
-                                                          atqa7Controller.text),
-                                                      uid: uid7Controller.text,
-                                                      tag: selectedType,
-                                                      data: blocks);
-                                                  tags.add(tag);
-                                                  appState
-                                                      .sharedPreferencesProvider
-                                                      .setCards(tags);
-                                                  appState.changesMade();
-                                                  Navigator.pop(context);
-                                                },
-                                                child: Text(localizations
-                                                    .save_as(localizations
-                                                        .x_byte_uid(7))),
-                                              ),
-                                              ElevatedButton(
-                                                onPressed: () {
-                                                  Navigator.pop(
-                                                      context); // Close the modal without saving
-                                                },
-                                                child:
-                                                    Text(localizations.cancel),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      );
-                                    }
-                                  }
-                                },
-                                style: customCardButtonStyle(appState),
-                                child: const Icon(Icons.file_upload),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ElevatedButton(
-                                onPressed: createCard = () async {
-                                  showDialog(
-                                    context: context,
-                                    builder: (context) =>
-                                        const CardCreateMenu(),
-                                  );
-                                },
-                                style: customCardButtonStyle(appState),
-                                child: const Icon(Icons.add),
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    ]),
-              ),
+                                      var tags = appState
+                                          .sharedPreferencesProvider
+                                          .getCards();
+                                      var tag = CardSave(
+                                          name: nameController.text,
+                                          sak: hexToBytes(
+                                              sak7Controller.text)[0],
+                                          atqa:
+                                              hexToBytes(atqa7Controller.text),
+                                          uid: uid7Controller.text,
+                                          tag: mfClassicGetChameleonTagType(
+                                              selectedType),
+                                          data: blocks);
+                                      tags.add(tag);
+                                      appState.sharedPreferencesProvider
+                                          .setCards(tags);
+                                      appState.changesMade();
+                                      Navigator.pop(context);
+                                    },
+                                    child: Text(localizations
+                                        .save_as(localizations.x_byte_uid(7))),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.pop(
+                                          context); // Close the modal without saving
+                                    },
+                                    child: Text(localizations.cancel),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+                        }
+                      }
+                    },
+                    style: customCardButtonStyle(appState),
+                    child: const Icon(Icons.add),
+                  ),
+                )
+              ]),
               Expanded(
                   child: SingleChildScrollView(
                       child: AlignedGridView.count(
@@ -611,15 +460,14 @@ class SavedCardsPageState extends State<SavedCardsPage> {
                           shrinkWrap: true,
                           itemBuilder: (BuildContext context, int index) {
                             final tag = tags[index];
-                            return ElementButton(
+                            return SavedCard(
                               icon: (chameleonTagToFrequency(tag.tag) ==
                                       TagFrequency.hf)
                                   ? Icons.credit_card
                                   : Icons.wifi,
                               iconColor: tag.color,
                               firstLine: tag.name.isEmpty ? "⠀" : tag.name,
-                              secondLine:
-                                  chameleonCardToString(tag, localizations),
+                              secondLine: chameleonCardToString(tag),
                               itemIndex: index,
                               onPressed: () {
                                 showDialog(
@@ -718,62 +566,63 @@ class SavedCardsPageState extends State<SavedCardsPage> {
           Expanded(
             child: Card(
                 child: Column(children: [
-              sectionHeader(
-                localizations.dictionaries,
-                [
-                  IconButton(
-                    onPressed: () => importDictionary(),
-                    icon: const Icon(Icons.upload),
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Text(
+                  localizations.dictionaries,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
                   ),
-                ],
+                ),
               ),
-              Visibility(
-                visible: !isCompact,
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        constraints: const BoxConstraints(maxHeight: 100),
-                        child: ElevatedButton(
-                          onPressed: importDictionary = () async {
-                            PlatformFile? result = await FilePicker.pickFile();
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  constraints: const BoxConstraints(maxHeight: 100),
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      FilePickerResult? result =
+                          await FilePicker.pickFiles();
 
-                            if (result != null) {
-                              File file = File(result.path!);
-                              String contents;
-                              try {
-                                contents = const Utf8Decoder()
-                                    .convert(await file.readAsBytes());
-                              } catch (e) {
-                                return;
-                              }
+                      if (result != null) {
+                        File file = File(result.files.single.path!);
+                        String contents;
+                        try {
+                          contents = const Utf8Decoder()
+                              .convert(await file.readAsBytes());
+                        } catch (e) {
+                          return;
+                        }
 
-                              var dictionaries = appState
-                                  .sharedPreferencesProvider
-                                  .getDictionaries();
+                        List<Uint8List> keys = [];
+                        for (var key in contents.split("\n")) {
+                          key = key.trim();
+                          if (key.length == 12 && isValidHexString(key)) {
+                            keys.add(hexToBytes(key));
+                          }
+                        }
 
-                              Dictionary dictionary = Dictionary.fromString(
-                                  contents,
-                                  name: result.name.split(".")[0]);
+                        if (keys.isEmpty) {
+                          return;
+                        }
 
-                              if (dictionary.keys.isEmpty) {
-                                return;
-                              }
-
-                              dictionaries.add(dictionary);
-
-                              appState.sharedPreferencesProvider
-                                  .setDictionaries(dictionaries);
-                              appState.changesMade();
-                            }
-                          },
-                          style: customCardButtonStyle(appState),
-                          child: const Icon(Icons.upload),
-                        ),
-                      )
-                    ]),
-              ),
+                        var dictionaries = appState.sharedPreferencesProvider
+                            .getDictionaries();
+                        dictionaries.add(Dictionary(
+                            name: result.files.single.name.split(".")[0],
+                            keys: keys));
+                        appState.sharedPreferencesProvider
+                            .setDictionaries(dictionaries);
+                        appState.changesMade();
+                      }
+                    },
+                    style: customCardButtonStyle(appState),
+                    child: const Icon(Icons.add),
+                  ),
+                )
+              ]),
               Expanded(
                   child: SingleChildScrollView(
                       child: AlignedGridView.count(
@@ -788,7 +637,7 @@ class SavedCardsPageState extends State<SavedCardsPage> {
                           shrinkWrap: true,
                           itemBuilder: (BuildContext context, int index) {
                             final dictionary = dictionaries[index];
-                            return ElementButton(
+                            return SavedCard(
                               icon: Icons.key,
                               iconColor: dictionary.color,
                               firstLine: dictionary.name,
@@ -818,12 +667,21 @@ class SavedCardsPageState extends State<SavedCardsPage> {
                                 ),
                                 IconButton(
                                   onPressed: () async {
-                                    await FilePicker.saveFile(
-                                      dialogTitle:
-                                          '${localizations.output_file}:',
-                                      fileName: '${dictionary.name}.dic',
-                                      bytes: dictionary.toFile(),
-                                    );
+                                    try {
+                                      await FileSaver.instance.saveAs(
+                                          name: dictionary.name,
+                                          bytes: dictionary.toFile(),
+                                          ext: 'dic',
+                                          mimeType: MimeType.other);
+                                    } on UnimplementedError catch (_) {
+                                      String? outputFile =
+                                              await FilePicker.saveFile(
+                                            dialogTitle:
+                                                '${localizations.output_file}:',
+                                            fileName: '${dictionary.name}.dic',
+                                            bytes: dictionary.toFile(),
+                                          );
+                                    }
                                   },
                                   icon: const Icon(Icons.download),
                                 ),

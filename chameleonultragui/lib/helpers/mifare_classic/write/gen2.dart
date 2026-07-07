@@ -1,6 +1,5 @@
 import 'dart:typed_data';
 
-import 'package:chameleonultragui/helpers/definitions.dart';
 import 'package:chameleonultragui/helpers/general.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/general.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/recovery.dart';
@@ -18,17 +17,17 @@ class MifareClassicGen2WriteHelper extends BaseMifareClassicWriteHelper {
 
   @override
   Future<bool> isMagic(dynamic data) async {
-    CardSave cardSave = data;
-    CardData? card = await communicator.scan14443aTag();
-    if (card == null) {
+    try {
+      CardSave cardSave = data;
+      var card = await communicator.scan14443aTag();
+      if (cardSave.uid == bytesToHexSpace(card.uid)) {
+        return true; // if UID matches we can assume it is same card
+      }
+
+      return false; // we can't check
+    } catch (_) {
       return false;
     }
-
-    if (cardSave.uid == bytesToHexSpace(card.uid)) {
-      return true; // if UID matches we can assume it is same card
-    }
-
-    return false; // we can't check
   }
 
   @override
@@ -49,19 +48,12 @@ class MifareClassicGen2WriteHelper extends BaseMifareClassicWriteHelper {
 
   Future<bool> writeBlockModifier(CardSave card, int block, Uint8List data,
       {bool tryBothKeys = false, bool useGenericKey = false}) async {
-    for (int retry = 0; retry < 10; retry++) {
-      try {
-        await Future.delayed(
-            const Duration(milliseconds: 50)); // Stability delay
-        if (await writeBlock(block, data,
-            tryBothKeys: tryBothKeys, useGenericKey: useGenericKey)) {
-          return true;
-        }
-        await Future.delayed(const Duration(milliseconds: 150));
-      } catch (_) {}
+    try {
+      return writeBlock(block, data,
+          tryBothKeys: tryBothKeys, useGenericKey: useGenericKey);
+    } catch (_) {
+      return false;
     }
-
-    return false;
   }
 
   @override
@@ -96,7 +88,7 @@ class MifareClassicGen2WriteHelper extends BaseMifareClassicWriteHelper {
       }
 
       if (useGenericKey) {
-        if (await communicator.mf1WriteBlock(block, 0x61,
+        if (await communicator.mf1WriteBlock(block, 0x60,
             recovery.validKeys[40 + mfClassicGetSectorByBlock(block)], data)) {
           return true;
         }
@@ -132,12 +124,6 @@ class MifareClassicGen2WriteHelper extends BaseMifareClassicWriteHelper {
         cleanSectors[sector] = await writeBlockModifier(
             card, block, data[block],
             tryBothKeys: true);
-        if (cleanSectors[sector]) {
-          // Update keys to match the newly written trailer,
-          // so subsequent data block writes use the correct keys.
-          recovery.validKeys[sector] = data[block].sublist(0, 6);
-          recovery.validKeys[40 + sector] = data[block].sublist(10, 16);
-        }
       }
     }
 

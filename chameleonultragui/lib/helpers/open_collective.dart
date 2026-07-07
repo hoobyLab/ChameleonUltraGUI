@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 Future<List<String>> fetchOpenCollectiveContributors() async {
@@ -29,7 +28,7 @@ Future<List<String>> fetchOpenCollectiveContributors() async {
 
     return contributorsList;
   } catch (e) {
-    List<String> error = [kDebugMode ? e.toString() : ''];
+    List<String> error = [e.toString()];
     return error;
   }
 }

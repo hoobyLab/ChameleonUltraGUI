@@ -1,7 +1,4 @@
 import 'package:chameleonultragui/bridge/chameleon.dart';
-import 'package:chameleonultragui/generated/i18n/app_localizations.dart';
-import 'package:chameleonultragui/helpers/definitions.dart';
-import 'package:chameleonultragui/helpers/general.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/general.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/recovery.dart';
 import 'package:chameleonultragui/helpers/mifare_classic/write/base.dart';
@@ -45,28 +42,17 @@ abstract class AbstractWriteHelper {
   Future<void> reset() async {} // delete data from helper
 
   static AbstractWriteHelper? getClassByCardType(
-      TagType type,
-      ChameleonGUIState appState,
-      void Function() update,
-      AppLocalizations localizations) {
+      TagType type, ChameleonGUIState appState, void Function() update) {
     if (isMifareClassic(type)) {
       return BaseMifareClassicWriteHelper(appState.communicator!,
-          recovery: MifareClassicRecovery(
-              appState: appState,
-              update: update,
-              localizations: localizations));
+          recovery: MifareClassicRecovery(appState: appState, update: update));
     }
 
     if (isMifareUltralight(type)) {
       return BaseMifareUltralightWriteHelper(appState.communicator!);
     }
 
-    if (isEM410X(type) ||
-        type == TagType.hidProx ||
-        type == TagType.viking ||
-        type == TagType.pac ||
-        type == TagType.ioProx ||
-        type == TagType.idteck) {
+    if (type == TagType.em410X) {
       return BaseT55XXCardHelper(appState.communicator!);
     }
 
@@ -88,7 +74,4 @@ abstract class AbstractWriteHelper {
   @override
   bool operator ==(Object other) =>
       other is AbstractWriteHelper && name == other.name;
-
-  @override
-  int get hashCode => name.hashCode;
 }

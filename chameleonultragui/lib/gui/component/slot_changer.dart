@@ -1,8 +1,10 @@
-import 'package:chameleonultragui/gui/component/error_page.dart';
-import 'package:chameleonultragui/helpers/definitions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:chameleonultragui/bridge/chameleon.dart';
 import 'package:chameleonultragui/main.dart';
+
+// Localizations
+import 'package:chameleonultragui/generated/i18n/app_localizations.dart';
 
 class SlotChanger extends StatefulWidget {
   const SlotChanger({super.key});
@@ -75,7 +77,7 @@ class SlotChangerState extends State<SlotChanger> {
   @override
   Widget build(BuildContext context) {
     var appState = context.read<ChameleonGUIState>();
-
+    var localizations = AppLocalizations.of(context)!;
     return FutureBuilder(
         future: getFutureData(),
         builder: (BuildContext context, AsyncSnapshot snapshot) {
@@ -96,7 +98,7 @@ class SlotChangerState extends State<SlotChanger> {
             );
           } else if (snapshot.hasError) {
             appState.connector!.performDisconnect();
-            return ErrorPage(errorMessage: snapshot.error.toString());
+            return Text('${localizations.error}: ${snapshot.error.toString()}');
           } else {
             final slotIcons = snapshot.data;
             presold = slotIcons;

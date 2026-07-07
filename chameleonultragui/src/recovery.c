@@ -18,8 +18,6 @@
 #include <sys/param.h>
 #endif
 
-#include "hardnested.h"
-
 #define MEM_CHUNK 10000
 #define TRY_KEYS 50
 
@@ -51,23 +49,14 @@ typedef struct
   uint32_t endPos;
 } RecPar;
 
-#define KEY_SPACE_SIZE (1 << 18)
-
-FFI_PLUGIN_EXPORT uint64_t hardnested(HardNested *data)
-{
-  uint64_t foundkey = 0;
-  mfnestedhard(0, 0, NULL, 0, 0, NULL, false, false, false, &foundkey, data->nonces, data->length);
-  return foundkey;
-}
-
-FFI_PLUGIN_EXPORT uint64_t *darkside(Darkside *data, uint32_t *outputKeyCount)
+FFI_PLUGIN_EXPORT uint64_t *darkside(Darkside *data, uint64_t *outputKeyCount)
 {
   uint32_t uid = data->uid;
   uint32_t count = 0, i = 0;
   uint64_t keycount = 0;
   uint64_t *keylist = NULL, *last_keylist = NULL;
   DarksideParam *dps = calloc(1, sizeof(DarksideParam) * data->count);
-  uint64_t *keys = (uint64_t *)calloc(1, KEY_SPACE_SIZE * sizeof(uint64_t));
+  uint64_t *keys = malloc(sizeof(uint64_t) * 256);
   bool no_key_recover = true;
 
   for (count = 0; count < data->count; count++)
@@ -110,7 +99,7 @@ FFI_PLUGIN_EXPORT uint64_t *darkside(Darkside *data, uint32_t *outputKeyCount)
     if (keycount > 0)
     {
       no_key_recover = false;
-      *outputKeyCount = keycount;
+      *outputKeyCount = MIN(256, keycount);
       for (i = 0; i < *outputKeyCount; i++)
       {
         if (par_list == 0)
@@ -144,7 +133,7 @@ FFI_PLUGIN_EXPORT uint64_t *darkside(Darkside *data, uint32_t *outputKeyCount)
     free(dps);
   }
 
-  return malloc(8);
+  return malloc(1);
 }
 
 int uint64_compare(const void *a, const void *b)
@@ -202,82 +191,6 @@ uint64_t *most_frequent_uint64(uint64_t *keys, uint32_t size, uint32_t *outputKe
   }
 
   return output;
-}
-
-static int bin_to_uint8_arr(uint32_t bin_val, uint8_t bit_arr[], uint8_t arr_size)
-{
-  uint32_t temp = bin_val;
-
-  for (int i = 0; i < arr_size; i++)
-  {
-    bit_arr[i] = 0;
-  }
-
-  for (int i = arr_size - 1; i >= 0 && temp > 0; i--)
-  {
-    uint8_t digit = temp % 10;
-    bit_arr[i] = digit;
-    temp /= 10;
-  }
-
-  return 0;
-}
-
-FFI_PLUGIN_EXPORT uint64_t *static_encrypted_nested(StaticEncryptedNested *data, uint32_t *outputKeyCount)
-{
-  uint64_t authuid = data->uid;
-  uint32_t nt = data->nt;
-  uint32_t nt_enc = data->nt_enc;
-
-  uint8_t nt_par_err_arr[4];
-  bin_to_uint8_arr(data->nt_par_enc, nt_par_err_arr, 4);
-
-  uint8_t nt_par_enc = ((nt_par_err_arr[0] ^ oddparity8((nt_enc >> 24) & 0xFF)) << 3) |
-                       ((nt_par_err_arr[1] ^ oddparity8((nt_enc >> 16) & 0xFF)) << 2) |
-                       ((nt_par_err_arr[2] ^ oddparity8((nt_enc >> 8) & 0xFF)) << 1) |
-                       ((nt_par_err_arr[3] ^ oddparity8((nt_enc >> 0) & 0xFF)) << 0);
-
-  uint64_t *result_keys = (uint64_t *)calloc(1, KEY_SPACE_SIZE * sizeof(uint64_t));
-
-  struct Crypto1State *revstate, *revstate_start = NULL, *s = NULL;
-  uint64_t lfsr = 0;
-  uint32_t ks1 = nt ^ nt_enc;
-
-  revstate = lfsr_recovery32(ks1, nt ^ authuid);
-  revstate_start = revstate;
-
-  s = crypto1_create(0);
-
-  while ((revstate->odd != 0x0) || (revstate->even != 0x0))
-  {
-    lfsr_rollback_word(revstate, nt ^ authuid, 0);
-    crypto1_get_lfsr(revstate, &lfsr);
-
-    // only filtering possibility: last parity bit ks in ks2
-    uint32_t ks2;
-    uint8_t lastpar1, lastpar2, kslastp;
-    crypto1_init(s, lfsr);
-    crypto1_word(s, nt ^ authuid, 0);
-    ks2 = crypto1_word(s, 0, 0);
-    lastpar1 = oddparity8(nt & 0xFF);
-    kslastp = (ks2 >> 24) & 1;
-    lastpar2 = (nt_par_enc & 1) ^ kslastp;
-    if (lastpar1 == lastpar2)
-    {
-      result_keys[(*outputKeyCount)++] = lfsr;
-      if (*outputKeyCount == KEY_SPACE_SIZE)
-      {
-        fprintf(stderr, "No space left on result_keys, abort! Increase KEY_SPACE_SIZE\n");
-        break;
-      }
-    }
-    revstate++;
-  }
-
-  crypto1_destroy(s);
-  crypto1_destroy(revstate_start);
-  revstate_start = NULL;
-  return result_keys;
 }
 
 // nested decrypt
@@ -348,7 +261,6 @@ static void nested_recover(RecPar *rp)
 uint64_t *nested_run(NtpKs1 *pNK, uint32_t sizePNK, uint32_t authuid, uint32_t *keyCount, uint32_t *outputKeyCount)
 {
   *keyCount = 0;
-  *outputKeyCount = 0;
 
   RecPar *pRPs = malloc(sizeof(RecPar));
   if (pRPs == NULL)
@@ -373,10 +285,11 @@ uint64_t *nested_run(NtpKs1 *pNK, uint32_t sizePNK, uint32_t authuid, uint32_t *
     {
       memcpy(keys, pRPs->keys, pRPs->keyCount * sizeof(uint64_t));
       free(pRPs->keys);
-      keys = most_frequent_uint64(keys, *keyCount, outputKeyCount);
     }
   }
   free(pRPs);
+
+  keys = most_frequent_uint64(keys, *keyCount, outputKeyCount);
 
   return keys;
 }
@@ -443,6 +356,7 @@ FFI_PLUGIN_EXPORT uint64_t *nested(Nested *data, uint32_t *outputKeyCount)
 
   uint32_t keyCount = 0;
   uint64_t *keys = nested_run(pNK, j, authuid, &keyCount, outputKeyCount);
+  *outputKeyCount = MIN(256, *outputKeyCount);
   return keys;
 }
 
@@ -519,6 +433,7 @@ FFI_PLUGIN_EXPORT uint64_t *static_nested(StaticNested *data, uint32_t *outputKe
 
   uint32_t keyCount = 0;
   uint64_t *keys = nested_run(pNK, j, authuid, &keyCount, outputKeyCount);
+  *outputKeyCount = MIN(256, *outputKeyCount);
   return keys;
 }
 
@@ -554,28 +469,4 @@ FFI_PLUGIN_EXPORT uint64_t mfkey32(Mfkey32 *data)
 
   free(s);
   return UINT64_MAX;
-}
-
-FFI_PLUGIN_EXPORT uint64_t mfkey64(Mfkey64 *data)
-{
-  struct Crypto1State *revstate;
-  uint64_t key;
-  uint32_t p64 = prng_successor(data->nt, 64);
-  uint32_t ks2 = data->ar_enc ^ p64;
-  uint32_t ks3 = data->at_enc ^ prng_successor(p64, 32);
-
-  revstate = lfsr_recovery64(ks2, ks3);
-  if (revstate == NULL)
-  {
-    return UINT64_MAX;
-  }
-
-  lfsr_rollback_word(revstate, 0, 0);
-  lfsr_rollback_word(revstate, 0, 0);
-  lfsr_rollback_word(revstate, data->nr_enc, 1);
-  lfsr_rollback_word(revstate, data->uid ^ data->nt, 0);
-  crypto1_get_lfsr(revstate, &key);
-  crypto1_destroy(revstate);
-
-  return key;
 }

@@ -15,10 +15,10 @@ import 'package:chameleonultragui/protobuf/dfu-cc.pb.dart';
 import 'dart:math';
 
 Future<Uint8List> fetchFirmware(ChameleonDevice device) async {
-  var content = await fetchFirmwareFromActions(device);
+  var content = await fetchFirmwareFromReleases(device);
 
   if (content.isEmpty) {
-    content = await fetchFirmwareFromReleases(device);
+    content = await fetchFirmwareFromActions(device);
   }
 
   return content;
@@ -91,8 +91,8 @@ Future<void> flashFirmware(ChameleonGUIState appState,
 
   (applicationDat, applicationBin) = await unpackFirmware(content);
 
-  await flashFile(appState.communicator, appState, applicationDat,
-      applicationBin, (progress) => appState.setProgressBar(progress / 100),
+  flashFile(appState.communicator, appState, applicationDat, applicationBin,
+      (progress) => appState.setProgressBar(progress / 100),
       firmwareZip: content,
       scaffoldMessenger: scaffoldMessenger,
       enterDFU: enterDFU);
@@ -102,16 +102,16 @@ Future<void> flashFirmwareZip(ChameleonGUIState appState,
     {ScaffoldMessengerState? scaffoldMessenger, bool enterDFU = true}) async {
   Uint8List applicationDat, applicationBin;
 
-  PlatformFile? result = await FilePicker.pickFile();
+  FilePickerResult? result = await FilePicker.pickFiles();
 
   if (result != null) {
-    File file = File(result.path!);
+    File file = File(result.files.single.path!);
 
     (applicationDat, applicationBin) =
         await unpackFirmware(await file.readAsBytes());
 
-    await flashFile(appState.communicator, appState, applicationDat,
-        applicationBin, (progress) => appState.setProgressBar(progress / 100),
+    flashFile(appState.communicator, appState, applicationDat, applicationBin,
+        (progress) => appState.setProgressBar(progress / 100),
         firmwareZip: await file.readAsBytes(),
         scaffoldMessenger: scaffoldMessenger,
         enterDFU: enterDFU);
